@@ -71,3 +71,6 @@ Testing/
 __pycache__/
 .venv/
 dist/
+
+.vscode
+.agents
