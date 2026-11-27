@@ -563,26 +563,31 @@ void mapped_files() {
     // Byte order selection applies to metadata; payload stays encoded as stored.
     ggufpp::parse_options options;
     options.byte_order = std::endian::big;
-    save(path, test_support::basic_fixture(std::endian::big));
-    auto big = ggufpp::MappedFile::open(path, options);
+    const auto big_path = directory.file("big-endian.gguf");
+    save(big_path, test_support::basic_fixture(std::endian::big));
+    auto big = ggufpp::MappedFile::open(big_path, options);
     check(big.document().byte_order() == std::endian::big);
     check(big.tensor_data(0).size() == 32);
 
     // Metadata-only files map successfully and have no tensor payload views.
     test_support::Fixture metadata_only;
     metadata_only.metadata("general.name", 8).string("mapped");
-    save(path, metadata_only.finish());
-    auto metadata_mapped = ggufpp::MappedFile::open(path);
+    const auto metadata_path = directory.file("metadata-only.gguf");
+    save(metadata_path, metadata_only.finish());
+    auto metadata_mapped = ggufpp::MappedFile::open(metadata_path);
     check(metadata_mapped.document().tensors().empty());
-    check(metadata_mapped.bytes().size() == std::filesystem::file_size(path));
+    check(metadata_mapped.bytes().size() == std::filesystem::file_size(metadata_path));
     expect_exception<std::out_of_range>([&] { (void)metadata_mapped.tensor_data(0); });
 
     expect_error(error_code::io_error,
                  [&] { (void)ggufpp::MappedFile::open(directory.file("missing.gguf")); });
-    save(path, std::span<const std::byte>{});
-    expect_error(error_code::unexpected_end, [&] { (void)ggufpp::MappedFile::open(path); });
-    save(path, std::span{bytes}.first(10));
-    expect_error(error_code::unexpected_end, [&] { (void)ggufpp::MappedFile::open(path); });
+    const auto empty_path = directory.file("empty.gguf");
+    save(empty_path, std::span<const std::byte>{});
+    expect_error(error_code::unexpected_end, [&] { (void)ggufpp::MappedFile::open(empty_path); });
+    const auto truncated_path = directory.file("truncated.gguf");
+    save(truncated_path, std::span{bytes}.first(10));
+    expect_error(error_code::unexpected_end,
+                 [&] { (void)ggufpp::MappedFile::open(truncated_path); });
 #endif
 }
 
