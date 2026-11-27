@@ -1,8 +1,8 @@
 # ggufpp
 
-A small GGUF reader written in standard C++20. The library, examples, tests, and
-benchmark have no third-party dependencies. Building requires a C++20 compiler
-and CMake 3.20 or newer. No packages are downloaded during configuration.
+A small GGUF reader written in C++20 with optional Python bindings. The C++
+library, examples, tests, and benchmark have no third-party dependencies.
+The C++ build requires a C++20 compiler and CMake 3.20 or newer.
 
 - GGUF v2 (little endian) and v3 (little or explicitly selected big endian).
 - All 13 metadata value types, including homogeneous and nested arrays.
@@ -35,6 +35,66 @@ and `-C Release` to CTest. To build just the library, use
 ./build/ggufpp_inspect model.gguf
 ./build/ggufpp_inspect big-endian-model.gguf --big-endian
 ```
+
+## Python
+
+From the repository root, install the package into a Python 3.10+ environment
+with a C++20 compiler available. The Python build uses pybind11 and
+scikit-build-core. The installed package has no Python runtime dependencies.
+
+```sh
+python -m pip install .
+python -m unittest discover -s tests/python -v
+```
+
+```python
+import ggufpp
+
+with ggufpp.open("model.gguf") as model:
+    print(model.metadata.get("general.architecture"))
+    tokens = model.metadata.get("tokenizer.ggml.tokens")
+    if tokens:
+        print(len(tokens), tokens[0])
+
+    buf = bytearray(4096)
+    for tensor in model.tensors.values():
+        print(tensor.name, tensor.dimensions, tensor.encoding.name, tensor.nbytes)
+        count = model.readinto(tensor.name, buf)
+        print(f"Read {count} encoded bytes")
+
+with ggufpp.mmap("model.gguf") as model:
+    for name in model.tensors:
+        with model.tensor_view(name) as raw:
+            print(name, raw.nbytes, raw[:8].hex())
+```
+
+| Entry point | Result |
+| --- | --- |
+| `ggufpp.open(path)` | A buffered `File`. `readinto(name, buffer, *, offset=0)` fills a writable C-contiguous buffer up to the end of the tensor and returns the number of bytes read. The byte offset is relative to the tensor. At its end the count is zero. |
+| `ggufpp.mmap(path)` | A `MappedFile`. `tensor_view(name)` returns a read-only byte `memoryview` over the raw encoded weights in file byte order. |
+| `ggufpp.parse(buffer)` | A `Document` parsed from a complete C-contiguous input. It owns its metadata and tensor directory. The caller can release the input immediately. |
+
+All three accept a keyword-only `options` argument, such as
+`ggufpp.ParseOptions(byte_order="big", max_tensors=10_000)`. The default
+byte order is little endian. All C++ parse limits are available by the same names.
+
+`metadata` and `tensors` are read-only mappings that iterate in file order.
+Metadata scalars are Python values. Use `metadata.value_type(key)` for the exact
+wire type. A `MetadataArray` converts elements on access, supports negative
+indices, and returns a tuple for a slice. Its `element_type` is available even
+for an empty array. Tensor descriptors expose `name`, `dimensions` in GGUF order
+(first dimension varies fastest), `encoding`, `element_count`, `nbytes`, and
+the absolute `file_offset`.
+
+Closing a file invalidates its directory lookups and lazy metadata arrays.
+Retrieved tensor descriptors and scalar values remain usable. A tensor
+`memoryview` and its slices keep the mapping alive after the handle closes.
+Release all such views before replacing or truncating the file.
+
+Malformed input raises `ggufpp.ParseError`, with an `ErrorCode` in `.code` and
+the byte position in `.offset`. File I/O raises `OSError`, missing names raise
+`KeyError`, and closed-handle operations or invalid tensor offsets raise
+`ValueError`.
 
 ## Read a file
 

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=3.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "ggufpp"
+version = "0.1.0"
+description = "A C++20 GGUF reader with lazy Python metadata and zero-copy tensor views"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+wheel.packages = ["python/ggufpp"]
+install.components = ["python"]
+sdist.exclude = ["*"]
+sdist.include = [
+    "/pyproject.toml", "/README.md", "/CMakeLists.txt", "/cmake/*.in",
+    "/include/**/*.hpp", "/src/**/*.hpp", "/src/**/*.cpp",
+    "/python/bindings/*.cpp", "/python/bindings/*.hpp", "/python/ggufpp/*.py",
+    "/examples/*.cpp", "/benchmarks/*.cpp", "/tests/*.cpp", "/tests/*.hpp",
+    "/tests/*.cmake", "/tests/python/*.py",
+]
+
+[tool.scikit-build.cmake.define]
+GGUFPP_BUILD_PYTHON = "ON"
+GGUFPP_BUILD_EXAMPLES = "OFF"
+BUILD_TESTING = "OFF"
