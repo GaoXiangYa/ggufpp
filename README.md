@@ -9,10 +9,13 @@ and CMake 3.20 or newer. No packages are downloaded during configuration.
 - Owned metadata, binary-search lookup, and contiguous tensor descriptors.
 - 36 active tensor encodings, with checked block sizes, offsets, and payload ranges.
 - Buffered file opening and direct, bounded tensor reads into caller-owned memory.
+- Zero-copy `mmap` payload access (`MappedFile`) for inference-style loaders; `File`
+  remains the portable stream fallback.
 - Configurable resource limits and exceptions carrying error codes and byte offsets.
 
 This is a structural parser. It does not execute models, dequantize weights, write
 GGUF files, or require model-specific metadata such as `general.architecture`.
+`MappedFile` exposes raw encoded payload views; it still does not interpret them.
 Unknown metadata keys are retained. Unknown and removed tensor encodings are
 rejected because their payload sizes cannot be validated safely.
 
@@ -78,6 +81,61 @@ prefix of the payload. `read_tensor` copies raw encoded bytes directly into the
 provided span. Consecutive reads reuse the stream buffer without repeated seeks.
 It performs no endian conversion or dequantization.
 
+## Zero-copy mmap access
+
+For inference-style loading, `ggufpp::MappedFile` maps the complete file read-only
+and exposes tensor payload views that point straight into the mapping. Nothing is
+copied, an open descriptor is not retained, and the OS page cache manages the
+weights.
+
+```cpp
+#include <ggufpp/ggufpp.hpp>
+
+int main() {
+    auto file = ggufpp::MappedFile::open("model.gguf");
+    const auto& document = file.document();
+
+    for (std::size_t i = 0; i < document.tensors().size(); ++i) {
+        const auto bytes = file.tensor_data(i); // std::span<const std::byte>
+        // Point kernels at bytes.data()/bytes.size(); no copy, no dequantization.
+    }
+
+    const auto attention = file.tensor_data("blk.0.attn_q.weight"); // optional<span>
+    if (attention) {
+        // attention->data() is inside the read-only mapping.
+    }
+}
+```
+
+`bytes()` returns the whole mapping (metadata + payload), `tensor_data(index)`
+returns the encoded bytes of one tensor, and `tensor_data(name)` returns
+`std::optional<std::span<const std::byte>>`. `Document::find_tensor_index()` is
+available when an integer index is needed.
+
+Lifetimes and safety:
+
+- Views borrow from the mapping; they stay valid while the `MappedFile` is alive
+  (moving it does not remap, so pointers remain valid). Do not keep them after
+  destruction.
+- Const access is safe from multiple threads: both the mapping and the parsed
+  document are read-only. The file must not be modified or truncated while it is
+  mapped; a concurrent change can fault (`SIGBUS` on POSIX) or expose inconsistent
+  bytes.
+- The whole file is mapped; on 32-bit platforms a file larger than the address
+  space fails with `ParseError` (`resource_limit`). Use `File` there.
+- Supported backends: Windows (`CreateFileMappingW`) and POSIX (`mmap`: Linux,
+  macOS, BSD). Other platforms throw `ParseError` (`io_error`); `File` remains
+  fully portable.
+- `MappedFile` does not retain an open descriptor; the mapping keeps the file
+  alive.
+- `GGUFPP_HAS_MMAP` is 1 when a backend is available for the including translation
+  unit.
+
+The mapping itself does not prefetch: the first touch of each page is a demand
+fault handled by the OS page cache, so cold-cache throughput is device-bound and
+warm re-reads are memory-bound. Payload bytes keep the file byte order; no
+conversion or dequantization is performed.
+
 ## Parse memory and inspect arrays
 
 ```cpp
@@ -117,7 +175,8 @@ auto file = ggufpp::File::open("model.gguf", options);
 
 Byte order is explicit; it is not inferred from the magic. Tensor payloads keep
 the original file byte order. Both memory and file parsing require all described
-payload bytes to exist, but do not inspect the payload contents.
+payload bytes to exist, but do not inspect the payload contents. `MappedFile::open`
+accepts the same `parse_options` and applies them to the mapped bytes.
 
 The parser checks UTF-8, metadata keys, booleans, duplicate names, dimensions,
 quantization block divisibility, alignment, overflow, overlapping tensor ranges,

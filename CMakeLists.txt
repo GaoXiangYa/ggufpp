@@ -10,7 +10,7 @@ option(GGUFPP_BUILD_BENCHMARKS "Build the standalone benchmark" OFF)
 option(GGUFPP_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 option(GGUFPP_BUILD_FUZZER "Build the Clang/libFuzzer parser harness" OFF)
 
-add_library(ggufpp STATIC src/parser.cpp src/file.cpp src/tensor.cpp)
+add_library(ggufpp STATIC src/parser.cpp src/file.cpp src/mapped_file.cpp src/tensor.cpp)
 add_library(ggufpp::ggufpp ALIAS ggufpp)
 target_compile_features(ggufpp PUBLIC cxx_std_20)
 set_target_properties(ggufpp PROPERTIES CXX_EXTENSIONS OFF POSITION_INDEPENDENT_CODE ON)
@@ -53,7 +53,7 @@ if(BUILD_TESTING)
         -Dconfig=$<CONFIG>
         "-Dconsumer_flags=${consumer_flags}"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_smoke.cmake)
-    foreach(header document error file ggufpp metadata tensor)
+    foreach(header document error file ggufpp mapped_file metadata tensor)
         set(header_source "${CMAKE_CURRENT_BINARY_DIR}/header_checks/${header}.cpp")
         file(GENERATE OUTPUT "${header_source}" CONTENT "#include <ggufpp/${header}.hpp>\n")
         add_library(ggufpp_header_${header} OBJECT "${header_source}")

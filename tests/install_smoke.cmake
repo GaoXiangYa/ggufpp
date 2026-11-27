@@ -20,6 +20,8 @@ file(WRITE "${smoke_dir}/source/main.cpp" [=[
 int main() {
     const std::array<std::byte, 24> bytes{};
     try { (void)ggufpp::parse(bytes); }
+    catch (const ggufpp::ParseError&) { }
+    try { (void)ggufpp::MappedFile::open("ggufpp-install-smoke-missing.gguf"); }
     catch (const ggufpp::ParseError&) { return 0; }
     return 1;
 }

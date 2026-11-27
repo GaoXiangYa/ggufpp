@@ -2,9 +2,11 @@
 
 #include "fixture.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -12,10 +14,13 @@
 #include <limits>
 #include <random>
 #include <source_location>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -508,6 +513,79 @@ void buffered_metadata_and_files() {
     }
 }
 
+void mapped_files() {
+#if GGUFPP_HAS_MMAP
+    static_assert(!std::is_copy_constructible_v<ggufpp::MappedFile>);
+    static_assert(std::is_move_constructible_v<ggufpp::MappedFile>);
+    TemporaryDirectory directory;
+    const auto path = directory.file("mapped.gguf");
+    const auto bytes = test_support::basic_fixture();
+    save(path, bytes);
+
+    auto mapped = ggufpp::MappedFile::open(path);
+    check(mapped.document().version() == 3);
+    check(mapped.document().file_size() == bytes.size());
+    check(mapped.bytes().size() == bytes.size());
+    check(std::equal(mapped.bytes().begin(), mapped.bytes().end(), bytes.begin(), bytes.end()));
+    check(mapped.document().find_tensor_index("weight").has_value());
+    check(!mapped.document().find_tensor_index("missing").has_value());
+    const auto* tensor = mapped.document().find_tensor("weight");
+    check(tensor != nullptr);
+
+    const auto data = mapped.tensor_data(0);
+    check(data.size() == tensor->byte_size);
+    // Zero copy: the view points into the file mapping, right after the metadata.
+    check(data.data() == mapped.bytes().data() + tensor->file_offset);
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        check(data[i] == static_cast<std::byte>(i));
+    }
+
+    const auto by_name = mapped.tensor_data("weight");
+    check(by_name.has_value());
+    check(by_name->data() == data.data() && by_name->size() == data.size());
+    check(!mapped.tensor_data("missing").has_value());
+    expect_exception<std::out_of_range>([&] { (void)mapped.tensor_data(1); });
+
+    // Mapping and stream reads expose the same encoded bytes.
+    std::array<std::byte, 32> copy{};
+    {
+        auto file = ggufpp::File::open(path);
+        file.read_tensor(0, 0, copy);
+    }
+    check(std::equal(copy.begin(), copy.end(), data.begin(), data.end()));
+
+    // Moving the owner keeps the mapping address and existing views valid.
+    auto moved = std::move(mapped);
+    const auto moved_data = moved.tensor_data(0);
+    check(moved_data.data() == data.data());
+    check(std::equal(moved_data.begin(), moved_data.end(), copy.begin(), copy.end()));
+
+    // Byte order selection applies to metadata; payload stays encoded as stored.
+    ggufpp::parse_options options;
+    options.byte_order = std::endian::big;
+    save(path, test_support::basic_fixture(std::endian::big));
+    auto big = ggufpp::MappedFile::open(path, options);
+    check(big.document().byte_order() == std::endian::big);
+    check(big.tensor_data(0).size() == 32);
+
+    // Metadata-only files map successfully and have no tensor payload views.
+    test_support::Fixture metadata_only;
+    metadata_only.metadata("general.name", 8).string("mapped");
+    save(path, metadata_only.finish());
+    auto metadata_mapped = ggufpp::MappedFile::open(path);
+    check(metadata_mapped.document().tensors().empty());
+    check(metadata_mapped.bytes().size() == std::filesystem::file_size(path));
+    expect_exception<std::out_of_range>([&] { (void)metadata_mapped.tensor_data(0); });
+
+    expect_error(error_code::io_error,
+                 [&] { (void)ggufpp::MappedFile::open(directory.file("missing.gguf")); });
+    save(path, std::span<const std::byte>{});
+    expect_error(error_code::unexpected_end, [&] { (void)ggufpp::MappedFile::open(path); });
+    save(path, std::span{bytes}.first(10));
+    expect_error(error_code::unexpected_end, [&] { (void)ggufpp::MappedFile::open(path); });
+#endif
+}
+
 void sparse_large_file() {
     TemporaryDirectory directory;
     const auto path = directory.file("sparse.gguf");
@@ -536,6 +614,16 @@ void sparse_large_file() {
     std::array<std::byte, 1> last{};
     file.read_tensor(0, payload_size - 1, last);
     check(last[0] == std::byte{0x5a});
+#if GGUFPP_HAS_MMAP && !defined(_WIN32)
+    // Mapping the whole file stays cheap: only the touched page is faulted in.
+    if (sizeof(std::size_t) >= sizeof(std::uint64_t)) {
+        auto mapped = ggufpp::MappedFile::open(path);
+        const auto data = mapped.tensor_data(0);
+        check(data.size() == payload_size);
+        check(data.back() == std::byte{0x5a});
+        check(data.front() == std::byte{0});
+    }
+#endif
 }
 
 void deterministic_mutations() {
@@ -655,6 +743,7 @@ int main() {
         std::pair{"truncation_and_overflow", &truncation_and_overflow},
         std::pair{"resource_limits", &resource_limits},
         std::pair{"file_reads_and_moves", &file_reads_and_moves},
+        std::pair{"mapped_files", &mapped_files},
         std::pair{"buffered_metadata_and_files", &buffered_metadata_and_files},
         std::pair{"sparse_large_file", &sparse_large_file},
         std::pair{"deterministic_mutations", &deterministic_mutations}};

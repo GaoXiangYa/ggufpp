@@ -6,6 +6,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -40,6 +41,8 @@ class Document {
     [[nodiscard]] auto tensors() const noexcept -> std::span<const tensor_info> { return tensors_; }
     [[nodiscard]] auto find_metadata(std::string_view key) const noexcept -> const MetadataValue*;
     [[nodiscard]] auto find_tensor(std::string_view name) const noexcept -> const tensor_info*;
+    [[nodiscard]] auto
+    find_tensor_index(std::string_view name) const noexcept -> std::optional<std::size_t>;
 
   private:
     friend class detail::Parser;

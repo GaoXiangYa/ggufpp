@@ -376,14 +376,20 @@ auto Document::find_metadata(std::string_view key) const noexcept -> const Metad
     return &metadata_[*it].value;
 }
 
-auto Document::find_tensor(std::string_view name) const noexcept -> const tensor_info* {
+auto Document::find_tensor_index(std::string_view name) const noexcept
+    -> std::optional<std::size_t> {
     const auto it =
         std::lower_bound(tensor_index_.begin(), tensor_index_.end(), name,
                          [this](auto index, auto key) { return tensors_[index].name < key; });
     if (it == tensor_index_.end() || tensors_[*it].name != name) {
-        return nullptr;
+        return std::nullopt;
     }
-    return &tensors_[*it];
+    return *it;
+}
+
+auto Document::find_tensor(std::string_view name) const noexcept -> const tensor_info* {
+    const auto index = find_tensor_index(name);
+    return index ? &tensors_[*index] : nullptr;
 }
 
 } // namespace ggufpp
